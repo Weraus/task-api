@@ -1,27 +1,17 @@
+# NOTE: Render discontinued free web services
+# Use this for paid hosting, or see alternatives below
+
 services:
-  # Backend API Service
+  # Backend API Service (Starter: $7/month)
   - type: web
     name: task-api-backend
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: free
     healthCheckPath: /health
-    # Auto-deploy on push to main
     autoDeploy: true
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
 
-  # Frontend Static Site
-  - type: web
-    name: task-api-frontend
-    runtime: static
-    buildCommand: cd frontend && npm install && npm run build
-    staticPublishPath: frontend/dist
-    plan: free
-    autoDeploy: true
-    # SPA routing - redirect all routes to index.html
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
+# Frontend: Deploy separately as Static Site (free on other platforms)
+# See README for free hosting alternatives
