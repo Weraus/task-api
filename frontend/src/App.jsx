@@ -3,13 +3,9 @@ import TaskForm from './components/TaskForm';
 import TaskList from './components/TaskList';
 import './App.css';
 
-// Dynamic API URL based on environment
-// In production, use relative path with nginx proxy
-// In development, use localhost
-const API_URL = import.meta.env.VITE_API_URL || 
-  (import.meta.env.PROD ? '/api' : 'http://localhost:8000');
-
-console.log('API URL:', API_URL); // Debug log
+// API URL - set VITE_API_URL in Vercel environment variables
+// Example: VITE_API_URL=https://yourusername.pythonanywhere.com
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
   const [tasks, setTasks] = useState([]);

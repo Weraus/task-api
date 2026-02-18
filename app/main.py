@@ -1,6 +1,7 @@
 """
 Simple Task Management API
 A FastAPI backend for managing tasks with CRUD operations.
+Uses SQLite for persistent storage (works on PythonAnywhere).
 """
 
 from fastapi import FastAPI, HTTPException
@@ -9,6 +10,12 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 import uuid
+import sqlite3
+import json
+import os
+
+# Database path - works locally and on PythonAnywhere
+DB_PATH = os.environ.get('DB_PATH', 'tasks.db')
 
 app = FastAPI(
     title="Task Management API",
@@ -25,8 +32,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory database
-tasks_db = {}
+
+# Database helpers
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """Initialize database on startup."""
+    conn = get_db()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT,
+            completed INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
+# Initialize DB on module load
+init_db()
 
 
 class TaskBase(BaseModel):
@@ -46,6 +78,18 @@ class Task(TaskBase):
 
     class Config:
         from_attributes = True
+
+
+def row_to_dict(row):
+    """Convert SQLite row to dict with proper types."""
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "description": row["description"],
+        "completed": bool(row["completed"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"]
+    }
 
 
 @app.get("/")
@@ -71,26 +115,48 @@ async def health_check():
 @app.get("/tasks", response_model=list[Task])
 async def get_tasks(completed: Optional[bool] = None):
     """Get all tasks, optionally filtered by completion status."""
-    tasks = list(tasks_db.values())
+    conn = get_db()
     if completed is not None:
-        tasks = [t for t in tasks if t["completed"] == completed]
-    return tasks
+        rows = conn.execute(
+            "SELECT * FROM tasks WHERE completed = ?",
+            (1 if completed else 0,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM tasks").fetchall()
+    conn.close()
+    return [row_to_dict(row) for row in rows]
 
 
 @app.get("/tasks/{task_id}", response_model=Task)
 async def get_task(task_id: str):
     """Get a specific task by ID."""
-    if task_id not in tasks_db:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM tasks WHERE id = ?",
+        (task_id,)
+    ).fetchone()
+    conn.close()
+    
+    if not row:
         raise HTTPException(status_code=404, detail="Task not found")
-    return tasks_db[task_id]
+    return row_to_dict(row)
 
 
 @app.post("/tasks", response_model=Task, status_code=201)
 async def create_task(task: TaskCreate):
     """Create a new task."""
     task_id = str(uuid.uuid4())
-    now = datetime.now()
-    new_task = {
+    now = datetime.now().isoformat()
+    
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO tasks (id, title, description, completed, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (task_id, task.title, task.description, 1 if task.completed else 0, now, now)
+    )
+    conn.commit()
+    conn.close()
+    
+    return {
         "id": task_id,
         "title": task.title,
         "description": task.description,
@@ -98,47 +164,78 @@ async def create_task(task: TaskCreate):
         "created_at": now,
         "updated_at": now
     }
-    tasks_db[task_id] = new_task
-    return new_task
 
 
 @app.put("/tasks/{task_id}", response_model=Task)
 async def update_task(task_id: str, task: TaskCreate):
     """Update an existing task."""
-    if task_id not in tasks_db:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    
+    if not row:
+        conn.close()
         raise HTTPException(status_code=404, detail="Task not found")
     
-    existing_task = tasks_db[task_id]
-    updated_task = {
+    now = datetime.now().isoformat()
+    conn.execute(
+        "UPDATE tasks SET title = ?, description = ?, completed = ?, updated_at = ? WHERE id = ?",
+        (task.title, task.description, 1 if task.completed else 0, now, task_id)
+    )
+    conn.commit()
+    conn.close()
+    
+    return {
         "id": task_id,
         "title": task.title,
         "description": task.description,
         "completed": task.completed,
-        "created_at": existing_task["created_at"],
-        "updated_at": datetime.now()
+        "created_at": row["created_at"],
+        "updated_at": now
     }
-    tasks_db[task_id] = updated_task
-    return updated_task
 
 
 @app.patch("/tasks/{task_id}", response_model=Task)
 async def partial_update_task(task_id: str, completed: bool):
     """Partially update a task (toggle completion)."""
-    if task_id not in tasks_db:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    
+    if not row:
+        conn.close()
         raise HTTPException(status_code=404, detail="Task not found")
     
-    tasks_db[task_id]["completed"] = completed
-    tasks_db[task_id]["updated_at"] = datetime.now()
-    return tasks_db[task_id]
+    now = datetime.now().isoformat()
+    conn.execute(
+        "UPDATE tasks SET completed = ?, updated_at = ? WHERE id = ?",
+        (1 if completed else 0, now, task_id)
+    )
+    conn.commit()
+    conn.close()
+    
+    return {
+        "id": task_id,
+        "title": row["title"],
+        "description": row["description"],
+        "completed": completed,
+        "created_at": row["created_at"],
+        "updated_at": now
+    }
 
 
 @app.delete("/tasks/{task_id}")
 async def delete_task(task_id: str):
     """Delete a task."""
-    if task_id not in tasks_db:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    
+    if not row:
+        conn.close()
         raise HTTPException(status_code=404, detail="Task not found")
     
-    del tasks_db[task_id]
+    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()
+    
     return {"message": "Task deleted successfully"}
 
 
